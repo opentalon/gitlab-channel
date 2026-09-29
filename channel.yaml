@@ -1,0 +1,42 @@
+kind: channel
+version: 1
+id: gitlab
+name: GitLab
+
+required_env: [GITLAB_TRIGGER_TOKEN, GITLAB_WEBHOOK_SECRET, GITLAB_API_URL]
+
+inbound:
+  http_webhook:
+    path: /webhook/gitlab
+    secret_header: "X-Gitlab-Token"
+    secret_value: "{{env.GITLAB_WEBHOOK_SECRET}}"
+
+  event_path: ""
+
+  process_when:
+    - field: object_attributes.note
+      contains: "!talooner"
+
+  dedup:
+    key: "{{event.object_attributes.id}}"
+    ttl: 5m
+
+  dispatch:
+    when:
+      - field: object_attributes.note
+        contains: "!talooner"
+    skip:
+      - field: object_attributes.system
+        equals: "true"
+    call:
+      method: POST
+      url: "{{env.GITLAB_API_URL}}/projects/{{event.project.id}}/trigger/pipeline?token={{env.GITLAB_TRIGGER_TOKEN}}&ref={{event.project.default_branch}}"
+      headers:
+        Content-Type: "application/x-www-form-urlencoded"
+      body: "variables[TALOONER_MR_IID]={{event.merge_request.iid}}&variables[TALOONER_NOTE_ID]={{event.object_attributes.id}}"
+
+  mapping:
+    conversation_id: "project.id"
+    sender_id: "user.username"
+    content: "object_attributes.note"
+    thread_id: "merge_request.iid"
