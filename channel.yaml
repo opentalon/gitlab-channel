@@ -3,7 +3,7 @@ version: 1
 id: gitlab
 name: GitLab
 
-required_env: [GITLAB_TRIGGER_TOKEN, GITLAB_WEBHOOK_SECRET, GITLAB_API_URL]
+required_env: [GITLAB_TRIGGER_TOKEN, GITLAB_WEBHOOK_SECRET, GITLAB_API_URL, GITLAB_BOT_USERNAME]
 
 inbound:
   http_webhook:
@@ -28,6 +28,13 @@ inbound:
     skip:
       - field: object_attributes.system
         equals: "true"
+      # Talooner's own replies (usage text, the /stop confirmation) often
+      # contain the literal string "!talooner" themselves — without this,
+      # they re-trigger a pipeline against their own post. See
+      # docs/design.md, "Why dispatch.skip also excludes the relay's own
+      # GitLab username".
+      - field: user.username
+        equals: "{{env.GITLAB_BOT_USERNAME}}"
     call:
       method: POST
       url: "{{env.GITLAB_API_URL}}/projects/{{event.project.id}}/trigger/pipeline?token={{env.GITLAB_TRIGGER_TOKEN}}&ref={{event.merge_request.source_branch}}"
