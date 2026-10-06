@@ -74,17 +74,55 @@ GitLab's documented `--form` examples for the trigger-pipeline endpoint use
 object. Talooner's GitLab event parser (`internal/event/gitlab`) reads
 `TALOONER_MR_IID`/`TALOONER_NOTE_ID` as pipeline **variables** (the legacy
 mechanism), not the newer CI/CD Catalog **inputs** mechanism, which *is*
-JSON-only. This repo has no Go module and no test suite of its own to verify
-the exact wire format against a live GitLab instance — treat this as
-unverified until exercised for real, per the caveat in the README.
+JSON-only. **Verified against a live GitLab.com project** — this is the
+correct wire format; the README's old "unverified, has no test suite of its
+own" caveat about this specific call no longer applies.
 
-## Why `ref` is the project's default branch
+## Why `ref` is the MR's source branch, not the default branch
 
-The triggered pipeline needs some branch's `.gitlab-ci.yml` to run against.
-It isn't the MR's source or target branch — Talooner's CI job identifies
-which MR to review from `TALOONER_MR_IID` and fetches whatever it needs via
-the GitLab API itself, it doesn't rely on `CI_MERGE_REQUEST_*` predefined
-variables (those are only populated for `merge_request_event`-sourced
-pipelines, not API-triggered ones). `ref` here only selects which
-`.gitlab-ci.yml` revision defines the trigger-source pipeline job — the
-default branch is the standard stable choice.
+Was the project's default branch originally, on the reasoning that the
+triggered pipeline only needs *some* branch's `.gitlab-ci.yml` to run
+against, and Talooner's CI job identifies which MR to review from
+`TALOONER_MR_IID` rather than any `CI_MERGE_REQUEST_*` predefined variable
+(those only populate for `merge_request_event`-sourced pipelines, not
+API-triggered ones).
+
+That reasoning missed a real consequence, found against a live project: a
+project's own `.gitlab-ci.yml` commonly has a top-level `workflow: rules:`
+gating on `$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH` (among others) — ref'ing
+the default branch makes a comment-triggered pipeline match that rule, which
+runs the *entire* pipeline (build/test/deploy jobs included), not just the
+Talooner `review:` job. A PR comment could fire a production deploy. Fixed
+to `{{event.merge_request.source_branch}}`, and documented in talooner's own
+`docs/deployment-and-setup.md` that a project hand-merging the `review:` job
+into existing CI also needs a `$CI_PIPELINE_SOURCE == "trigger"` workflow
+rule and per-job guards on anything that shouldn't run on a trigger-sourced
+pipeline.
+
+## Why `dispatch.skip` also excludes the relay's own GitLab username
+
+GitLab's Note Hook fires for *every* note on a merge request, including ones
+Talooner itself posts (the sticky review/usage/plan comments, the `/stop`
+confirmation) — and several of those bodies legitimately contain the literal
+string `!talooner` (usage text lists every command; the `/stop` confirmation
+says "until `!talooner /review` is run"). `process_when`/`dispatch.when`
+match on that substring with no author check, so without this skip rule,
+Talooner's own replies re-trigger a pipeline against themselves — confirmed
+live: two of Talooner's own posted comments on a real test MR each fired a
+real (wasted) pipeline run, one of them twice.
+
+GitHub has no equivalent gap — events caused by `GITHUB_TOKEN` don't
+retrigger GitHub Actions workflows at all, so this class of bug can't exist
+there. GitLab has no analogous protection; `gitlab-channel` has to implement
+its own, the same way `dispatch.skip`'s `object_attributes.system` exclusion
+already does for GitLab's own system-generated notes.
+
+`GITLAB_BOT_USERNAME` is therefore a **required** env var, not optional —
+without it, the skip rule's `equals` compares against an empty template
+result, which never matches a real username, so the self-trigger stays live
+by default rather than failing closed. Set it to the username of whatever
+account `GITLAB_TOKEN` authenticates as; a [project or group access
+token](https://docs.gitlab.com/user/project/settings/project_access_tokens/)
+auto-provisions a dedicated bot user (`project_{id}_bot_{random}`, or the
+token's own name if you rename it at creation) specifically so this value is
+stable and distinct from any human's username.

@@ -12,6 +12,7 @@ GitLab CI has no native "comment triggers a job" event (unlike GitHub Actions' `
 2. A webhook secret you choose yourself (any random string — this is *not* a GitLab-issued value, GitLab just echoes back whatever you configure as the Note Hook's "Secret token")
 3. Your GitLab instance's API base URL (`https://gitlab.com/api/v4` for GitLab.com, or your self-hosted instance's equivalent)
 4. A `.talooner`-configured project running Talooner's GitLab CI job (see [talooner#105](https://github.com/opentalon/talooner/issues/105)) — this channel only triggers the pipeline, it doesn't run Talooner itself
+5. The GitLab username of whatever account `GITLAB_TOKEN` (Talooner's own write credential, not this channel's) authenticates as — **required**, not optional. Without it, Talooner's own replies (which often contain the literal string `!talooner`) re-trigger a pipeline against themselves. A [project or group access token](https://docs.gitlab.com/user/project/settings/project_access_tokens/) gives you a stable, dedicated bot username for this; see docs/design.md
 
 ### Creating the GitLab Webhook
 
@@ -43,6 +44,7 @@ Or let OpenTalon fetch it automatically via `github`/`ref` in config (see below)
 export GITLAB_TRIGGER_TOKEN="glptt-..."
 export GITLAB_WEBHOOK_SECRET="a-random-string-you-choose"
 export GITLAB_API_URL="https://gitlab.com/api/v4"
+export GITLAB_BOT_USERNAME="project_12345_bot_abcdef"  # the username GITLAB_TOKEN authenticates as
 ```
 
 Or add them to your `.env` file.
@@ -99,8 +101,10 @@ The relay matches the comment, calls GitLab's Pipeline Trigger API with the MR I
 See [docs/design.md](docs/design.md) for the full rationale. Short version:
 
 - Only comments on merge requests are meaningfully handled — comments on issues/epics containing `!talooner` will still trigger a pipeline call (the underlying YAML match DSL can't express "AND noteable_type == MergeRequest" alongside the trigger-phrase match), but Talooner's own trigger-parsing side rejects a missing/invalid MR IID, so this fails closed on the CI side, just wastefully.
-- The Pipeline Trigger API call's exact request format (`variables[KEY]=value` as a form-urlencoded body, `token`/`ref` as query params) follows GitLab's documented `--form` curl examples; it has not been exercised against a live GitLab instance as part of this repo's own tests, since it has no Go module or test suite — verify against your instance before relying on it in production.
 - MR-close cleanup (unsubscribing Talooner's standing review) is not handled — no native GitLab pipeline source fires on MR close, and this channel doesn't listen to the Merge Request Hook, only the Note Hook. Deferred deliberately: supporting it would mean listening to a second webhook type for a resource-cleanup case, not core review behavior.
+- Fork merge request behavior is unverified — every live test so far has been same-project branches. Whether the trigger call can even resolve a fork's branch ref against the base project, and what GitLab's fork-MR CI/CD variable restrictions do to this flow, has not been checked.
+
+**Exercised against a live GitLab.com project** as of 2026-10 (real MRs, real pipelines, real webhook deliveries) — the Pipeline Trigger API wire format (`variables[KEY]=value` form-urlencoded body, `token`/`ref` query params) is confirmed correct, and the `ref`/dispatch-skip fixes above came directly from that testing. See [talooner's deployment-and-setup.md](https://github.com/opentalon/talooner/blob/master/docs/deployment-and-setup.md) for the full GitLab troubleshooting table this surfaced.
 
 ## Files
 
