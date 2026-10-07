@@ -3,13 +3,13 @@ version: 1
 id: gitlab
 name: GitLab
 
-required_env: [GITLAB_TRIGGER_TOKEN, GITLAB_WEBHOOK_SECRET, GITLAB_API_URL, GITLAB_BOT_USERNAME]
+required_env: [GITLAB_TRIGGER_TOKEN, GITLAB_WEBHOOK_SIGNING_TOKEN, GITLAB_API_URL, GITLAB_BOT_USERNAME]
 
 inbound:
   http_webhook:
     path: /webhook/gitlab
-    secret_header: "X-Gitlab-Token"
-    secret_value: "{{env.GITLAB_WEBHOOK_SECRET}}"
+    signature_scheme: "standard_webhooks"
+    signature_secret: "{{env.GITLAB_WEBHOOK_SIGNING_TOKEN}}"
 
   event_path: ""
 
