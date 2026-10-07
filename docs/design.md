@@ -53,18 +53,26 @@ support for this exact purpose in `opentalon` PR #370, fixing
 [opentalon/opentalon#364](https://github.com/opentalon/opentalon/issues/364))
 excludes these regardless of what the note body contains.
 
-## Why `secret_header`, not `validate_jwt`
+## Why `signature_scheme: standard_webhooks`, not `secret_header`
 
-GitLab's Note Hook authenticates with a static token in the `X-Gitlab-Token`
-header (set once, when the webhook is created) — not a JWT. `validate_jwt`
-in `opentalon`'s core webhook spec only speaks OIDC JWTs (built for
-Microsoft Bot Framework channels). `secret_header`/`secret_value` was added
-to the core (`opentalon` PR #370) specifically so this channel — and any
-other host with a shared-secret-header webhook auth scheme — has a
-first-class, fail-closed option. `inbound.dispatch` on a public
-`http_webhook` is rejected at channel-spec load time unless one of
-`validate_jwt` or `secret_header` is configured; see that PR for the
-enforcement.
+GitLab offers two webhook auth modes. The legacy "Secret token" sends a
+static value in the `X-Gitlab-Token` header on every delivery, so anything
+that logs headers between GitLab and OpenTalon leaks a reusable credential;
+GitLab's own UI labels it "not recommended". The "Signing token" mode
+(GitLab 19.0+) follows the Standard Webhooks spec: GitLab sends
+`webhook-id`, `webhook-timestamp` and `webhook-signature: v1,<base64>`,
+where the signature is HMAC-SHA256 over `{id}.{timestamp}.{raw body}` keyed
+with the base64-decoded `whsec_` token. Only the signature travels; a
+captured request can't be replayed after the core's 5-minute timestamp
+window, and can't be altered without the key.
+
+The core gained this as `signature_scheme`/`signature_secret` in
+`opentalon` PR #375 (issue #374). This channel used `secret_header`
+(`opentalon` PR #370) until then only because it was the sole shared-secret
+option. `validate_jwt` was never an option: it only speaks OIDC JWTs (built
+for Microsoft Bot Framework channels). `inbound.dispatch` on a public
+`http_webhook` is rejected at channel-spec load time unless `validate_jwt`,
+`secret_header` or `signature_scheme` is configured.
 
 ## Why the Pipeline Trigger API call uses `variables[KEY]=value` form encoding
 

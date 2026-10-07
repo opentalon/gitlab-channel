@@ -9,16 +9,17 @@ GitLab CI has no native "comment triggers a job" event (unlike GitHub Actions' `
 ## Prerequisites
 
 1. A GitLab project (or group) with a **pipeline trigger token** — Project → Settings → CI/CD → Pipeline trigger tokens
-2. A webhook secret you choose yourself (any random string — this is *not* a GitLab-issued value, GitLab just echoes back whatever you configure as the Note Hook's "Secret token")
-3. Your GitLab instance's API base URL (`https://gitlab.com/api/v4` for GitLab.com, or your self-hosted instance's equivalent)
-4. A `.talooner`-configured project running Talooner's GitLab CI job (see [talooner#105](https://github.com/opentalon/talooner/issues/105)) — this channel only triggers the pipeline, it doesn't run Talooner itself
-5. The GitLab username of whatever account `GITLAB_TOKEN` (Talooner's own write credential, not this channel's) authenticates as — **required**, not optional. Without it, Talooner's own replies (which often contain the literal string `!talooner`) re-trigger a pipeline against themselves. A [project or group access token](https://docs.gitlab.com/user/project/settings/project_access_tokens/) gives you a stable, dedicated bot username for this; see docs/design.md
+2. A webhook **signing token** — GitLab 19.0+ (GitLab.com today). GitLab signs every delivery with HMAC-SHA256 ([Standard Webhooks](https://www.standardwebhooks.com/) format, `webhook-signature` header), so the secret itself never travels on the wire, unlike the legacy "Secret token" mode GitLab labels "not recommended"
+3. An OpenTalon core that includes [opentalon#375](https://github.com/opentalon/opentalon/pull/375) (`signature_scheme` webhook auth). Older cores reject this spec at load time — `inbound.dispatch` without any auth they recognize — rather than run unauthenticated
+4. Your GitLab instance's API base URL (`https://gitlab.com/api/v4` for GitLab.com, or your self-hosted instance's equivalent)
+5. A `.talooner`-configured project running Talooner's GitLab CI job (see [talooner#105](https://github.com/opentalon/talooner/issues/105)) — this channel only triggers the pipeline, it doesn't run Talooner itself
+6. The GitLab username of whatever account `GITLAB_TOKEN` (Talooner's own write credential, not this channel's) authenticates as — **required**, not optional. Without it, Talooner's own replies (which often contain the literal string `!talooner`) re-trigger a pipeline against themselves. A [project or group access token](https://docs.gitlab.com/user/project/settings/project_access_tokens/) gives you a stable, dedicated bot username for this; see docs/design.md
 
 ### Creating the GitLab Webhook
 
 1. Go to your project → **Settings → Webhooks → Add new webhook**
 2. **URL**: `https://<your-opentalon-host>/webhook/gitlab`
-3. **Secret token**: the same random string you'll set as `GITLAB_WEBHOOK_SECRET` below
+3. **Signing token**: generate one (GitLab's UI offers a generate button), save it as `GITLAB_WEBHOOK_SIGNING_TOKEN` below. It has the form `whsec_<base64>`. Leave **Secret token** empty
 4. **Trigger**: check **Comments** only (Note events) — nothing else is consumed
 5. Save
 
@@ -42,7 +43,7 @@ Or let OpenTalon fetch it automatically via `github`/`ref` in config (see below)
 
 ```bash
 export GITLAB_TRIGGER_TOKEN="glptt-..."
-export GITLAB_WEBHOOK_SECRET="a-random-string-you-choose"
+export GITLAB_WEBHOOK_SIGNING_TOKEN="whsec_..."
 export GITLAB_API_URL="https://gitlab.com/api/v4"
 export GITLAB_BOT_USERNAME="project_12345_bot_abcdef"  # the username GITLAB_TOKEN authenticates as
 ```
@@ -71,7 +72,7 @@ channels:
 
 ### 4. Expose the webhook publicly
 
-`inbound.http_webhook` binds to the core's shared webhook server (default port 3978, path `/webhook/gitlab`). GitLab needs to reach it over the public internet — see `opentalon`'s [deployment guide](https://github.com/opentalon/opentalon/blob/master/docs/deployment-guide-k8s.md) for the Ingress example. Do not expose this endpoint without `GITLAB_WEBHOOK_SECRET` set — see [docs/design.md](docs/design.md) for why that's enforced, not just recommended.
+`inbound.http_webhook` binds to the core's shared webhook server (default port 3978, path `/webhook/gitlab`). GitLab needs to reach it over the public internet — see `opentalon`'s [deployment guide](https://github.com/opentalon/opentalon/blob/master/docs/deployment-guide-k8s.md) for the Ingress example. Do not expose this endpoint without `GITLAB_WEBHOOK_SIGNING_TOKEN` set — see [docs/design.md](docs/design.md) for why that's enforced, not just recommended.
 
 ### 5. Run OpenTalon
 
