@@ -22,31 +22,30 @@ e.g. to support some non-command chat use case — degrades into a sane
 The core's `dispatch.when`/`process_when`/`skip` rule lists are OR'd across
 entries — there's no way to express "field A matches AND field B matches" in
 the current DSL (see `opentalon/internal/channel/yaml_ws.go`'s `matchRule`).
-So `!talooner` appearing in a comment on an *issue* (GitLab's `noteable_type:
-"Issue"`) will still fire a Pipeline Trigger API call, even though Talooner
-only reviews merge requests.
+So the trigger phrase appearing in a comment on an *issue* (GitLab's
+`noteable_type: "Issue"`) will still fire a Pipeline Trigger API call, even
+though the triggered job only makes sense for merge requests.
 
-This is bounded, not silent: the triggered pipeline's `TALOONER_MR_IID`
-variable is templated from `{{event.merge_request.iid}}`, which is absent on
-an issue comment and resolves to an empty string. Talooner's own
-`internal/event/gitlab` trigger-parsing path
-(`opentalon/talooner`, PR #112) already rejects a non-positive/missing MR
-IID and skips the run — so the failure mode is a wasted CI pipeline
-invocation that immediately no-ops, not a wrong review posted somewhere.
+This is bounded, not silent, as long as the CI job validates its input: the
+triggered pipeline's `REVIEW_MR_IID` variable is templated from
+`{{event.merge_request.iid}}`, which is absent on an issue comment and
+resolves to an empty string. A job that rejects a non-positive/missing MR
+IID and skips the run turns the failure mode into a wasted CI pipeline
+invocation that immediately no-ops, not a wrong comment posted somewhere.
 
 If this turns out to matter (e.g. GitLab CI minutes cost becomes relevant),
-the real fix is either extending the core DSL to support AND-of-fields
-across a rule list, or teaching Talooner's own event parser to reject before
-the pipeline even starts a job (it can't — GitLab decides whether to run the
-pipeline before any Talooner code executes). Not attempted here.
+the real fix is extending the core DSL to support AND-of-fields across a
+rule list. Rejecting inside the job can't avoid the cost — GitLab decides
+whether to run the pipeline before any job code executes. Not attempted
+here.
 
 ## Why system notes are excluded via `dispatch.skip`, not `dispatch.when`
 
 `object_attributes.system: true` marks a GitLab-generated note (e.g. "mentioned
 in commit ...", "unresolved a thread") rather than a human-typed comment.
 These can embed referenced text — a cross-reference note can, in principle,
-quote a commit message — so a system note containing the literal string
-`!talooner` is a real (if narrow) way for an attacker who can push a commit
+quote a commit message — so a system note containing the trigger phrase
+is a real (if narrow) way for an attacker who can push a commit
 to a fork to get a comment containing arbitrary text attributed to a system
 note on the target project. `dispatch.skip` (added alongside `dispatch.when`
 support for this exact purpose in `opentalon` PR #370, fixing
@@ -79,10 +78,9 @@ for Microsoft Bot Framework channels). `inbound.dispatch` on a public
 GitLab's documented `--form` examples for the trigger-pipeline endpoint use
 `token`/`ref` as query parameters and `variables[KEY]=value` as
 `application/x-www-form-urlencoded` (or multipart) body fields — not a JSON
-object. Talooner's GitLab event parser (`internal/event/gitlab`) reads
-`TALOONER_MR_IID`/`TALOONER_NOTE_ID` as pipeline **variables** (the legacy
-mechanism), not the newer CI/CD Catalog **inputs** mechanism, which *is*
-JSON-only. **Verified against a live GitLab.com project** — this is the
+object. `REVIEW_MR_IID`/`REVIEW_NOTE_ID` are sent as pipeline **variables**
+(the legacy mechanism), not the newer CI/CD Catalog **inputs** mechanism,
+which *is* JSON-only. **Verified against a live GitLab.com project** — this is the
 correct wire format; the README's old "unverified, has no test suite of its
 own" caveat about this specific call no longer applies.
 
@@ -90,8 +88,8 @@ own" caveat about this specific call no longer applies.
 
 Was the project's default branch originally, on the reasoning that the
 triggered pipeline only needs *some* branch's `.gitlab-ci.yml` to run
-against, and Talooner's CI job identifies which MR to review from
-`TALOONER_MR_IID` rather than any `CI_MERGE_REQUEST_*` predefined variable
+against, and the CI job identifies which MR to act on from
+`REVIEW_MR_IID` rather than any `CI_MERGE_REQUEST_*` predefined variable
 (those only populate for `merge_request_event`-sourced pipelines, not
 API-triggered ones).
 
@@ -100,24 +98,22 @@ project's own `.gitlab-ci.yml` commonly has a top-level `workflow: rules:`
 gating on `$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH` (among others) — ref'ing
 the default branch makes a comment-triggered pipeline match that rule, which
 runs the *entire* pipeline (build/test/deploy jobs included), not just the
-Talooner `review:` job. A PR comment could fire a production deploy. Fixed
-to `{{event.merge_request.source_branch}}`, and documented in talooner's own
-`docs/deployment-and-setup.md` that a project hand-merging the `review:` job
-into existing CI also needs a `$CI_PIPELINE_SOURCE == "trigger"` workflow
+comment-triggered job. A PR comment could fire a production deploy. Fixed
+to `{{event.merge_request.source_branch}}`. A project adding the triggered
+job to existing CI also needs a `$CI_PIPELINE_SOURCE == "trigger"` workflow
 rule and per-job guards on anything that shouldn't run on a trigger-sourced
 pipeline.
 
 ## Why `dispatch.skip` also excludes the relay's own GitLab username
 
 GitLab's Note Hook fires for *every* note on a merge request, including ones
-Talooner itself posts (the sticky review/usage/plan comments, the `/stop`
-confirmation) — and several of those bodies legitimately contain the literal
-string `!talooner` (usage text lists every command; the `/stop` confirmation
-says "until `!talooner /review` is run"). `process_when`/`dispatch.when`
-match on that substring with no author check, so without this skip rule,
-Talooner's own replies re-trigger a pipeline against themselves — confirmed
-live: two of Talooner's own posted comments on a real test MR each fired a
-real (wasted) pipeline run, one of them twice.
+the triggered job itself posts (sticky summary/usage comments, command
+confirmations) — and those bodies legitimately contain the trigger phrase
+(usage text lists every command; a confirmation may say "until `!review` is
+run"). `process_when`/`dispatch.when` match on that substring with no author
+check, so without this skip rule, the bot's own replies re-trigger a pipeline
+against themselves — confirmed live: two of the bot's own posted comments on
+a real test MR each fired a real (wasted) pipeline run, one of them twice.
 
 GitHub has no equivalent gap — events caused by `GITHUB_TOKEN` don't
 retrigger GitHub Actions workflows at all, so this class of bug can't exist
@@ -129,8 +125,19 @@ already does for GitLab's own system-generated notes.
 without it, the skip rule's `equals` compares against an empty template
 result, which never matches a real username, so the self-trigger stays live
 by default rather than failing closed. Set it to the username of whatever
-account `GITLAB_TOKEN` authenticates as; a [project or group access
+account the CI job posts its replies as; a [project or group access
 token](https://docs.gitlab.com/user/project/settings/project_access_tokens/)
 auto-provisions a dedicated bot user (`project_{id}_bot_{random}`, or the
 token's own name if you rename it at creation) specifically so this value is
 stable and distinct from any human's username.
+
+## Why the trigger phrase is an env var
+
+`GITLAB_TRIGGER_PHRASE` keeps the channel independent of any particular bot:
+the phrase belongs to whatever CI job consumes the trigger, not to the relay.
+It is templated into both `process_when` and `dispatch.when` as a `contains`
+needle. On cores before `opentalon` PR #378 a template resolving to empty
+made `contains` match every string, so an unset phrase meant every comment
+on every merge request fired a pipeline. #378 makes a rule whose template
+resolves to empty never match, so an unset phrase fails closed: nothing is
+dispatched.
