@@ -3,7 +3,7 @@ version: 1
 id: gitlab
 name: GitLab
 
-required_env: [GITLAB_TRIGGER_TOKEN, GITLAB_WEBHOOK_SIGNING_TOKEN, GITLAB_API_URL, GITLAB_BOT_USERNAME]
+required_env: [GITLAB_TRIGGER_TOKEN, GITLAB_WEBHOOK_SIGNING_TOKEN, GITLAB_API_URL, GITLAB_BOT_USERNAME, GITLAB_TRIGGER_PHRASE]
 
 inbound:
   http_webhook:
@@ -15,7 +15,7 @@ inbound:
 
   process_when:
     - field: object_attributes.note
-      contains: "!talooner"
+      contains: "{{env.GITLAB_TRIGGER_PHRASE}}"
 
   dedup:
     key: "{{event.object_attributes.id}}"
@@ -24,13 +24,13 @@ inbound:
   dispatch:
     when:
       - field: object_attributes.note
-        contains: "!talooner"
+        contains: "{{env.GITLAB_TRIGGER_PHRASE}}"
     skip:
       - field: object_attributes.system
         equals: "true"
-      # Talooner's own replies (usage text, the /stop confirmation) often
-      # contain the literal string "!talooner" themselves — without this,
-      # they re-trigger a pipeline against their own post. See
+      # The bot's own replies (usage text, confirmations) often contain
+      # the trigger phrase themselves — without this, they re-trigger a
+      # pipeline against their own post. See
       # docs/design.md, "Why dispatch.skip also excludes the relay's own
       # GitLab username".
       - field: user.username
@@ -40,7 +40,7 @@ inbound:
       url: "{{env.GITLAB_API_URL}}/projects/{{event.project.id}}/trigger/pipeline?token={{env.GITLAB_TRIGGER_TOKEN}}&ref={{event.merge_request.source_branch}}"
       headers:
         Content-Type: "application/x-www-form-urlencoded"
-      body: "variables[TALOONER_MR_IID]={{event.merge_request.iid}}&variables[TALOONER_NOTE_ID]={{event.object_attributes.id}}"
+      body: "variables[REVIEW_MR_IID]={{event.merge_request.iid}}&variables[REVIEW_NOTE_ID]={{event.object_attributes.id}}"
 
   mapping:
     conversation_id: "project.id"
